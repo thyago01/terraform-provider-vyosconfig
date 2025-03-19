@@ -248,10 +248,11 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 			if err == nil {
 				terraformValue := cmd.Value.ValueString()
 
-				// Para casos específicos como endereços IP, precisamos fazer uma comparação mais inteligente
 				if len(pathParts) > 0 && pathParts[len(pathParts)-1] == "address" {
-					equal := compareAddressValues(terraformValue, currentValue)
-					if !equal {
+					normalizedCurrent := normalizeAddressValue(currentValue)
+					normalizedTF := normalizeAddressValue(terraformValue)
+
+					if normalizedCurrent != normalizedTF {
 						state.Commands[i].Value = types.StringValue(currentValue)
 						updateRequired = true
 					}
@@ -270,46 +271,46 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 }
 
 func compareAddressValues(terraformValue, currentValue string) bool {
-	if terraformValue == currentValue {
+	normTF := normalizeAddressValue(terraformValue)
+	normCurrent := normalizeAddressValue(currentValue)
+
+	if normTF == normCurrent {
 		return true
 	}
 
 	var tfAddresses, currentAddresses map[string][]string
 
-	if err := json.Unmarshal([]byte(terraformValue), &tfAddresses); err != nil {
-		return comparePlainValues(terraformValue, currentValue)
-	}
+	tfErr := json.Unmarshal([]byte(terraformValue), &tfAddresses)
+	currentErr := json.Unmarshal([]byte(currentValue), &currentAddresses)
 
-	if err := json.Unmarshal([]byte(currentValue), &currentAddresses); err != nil {
-		return comparePlainValues(terraformValue, currentValue)
-	}
+	if tfErr == nil && currentErr == nil {
+		tfAddrList, tfOk := tfAddresses["address"]
+		currentAddrList, currentOk := currentAddresses["address"]
 
-	tfAddrList, tfOk := tfAddresses["address"]
-	currentAddrList, currentOk := currentAddresses["address"]
+		if tfOk && currentOk {
+			if len(tfAddrList) != len(currentAddrList) {
+				return false
+			}
 
-	if !tfOk || !currentOk {
-		return comparePlainValues(terraformValue, currentValue)
-	}
+			tfSorted := make([]string, len(tfAddrList))
+			copy(tfSorted, tfAddrList)
+			sort.Strings(tfSorted)
 
-	if len(tfAddrList) != len(currentAddrList) {
-		return false
-	}
+			currentSorted := make([]string, len(currentAddrList))
+			copy(currentSorted, currentAddrList)
+			sort.Strings(currentSorted)
 
-	tfSorted := make([]string, len(tfAddrList))
-	copy(tfSorted, tfAddrList)
-	sort.Strings(tfSorted)
-
-	currentSorted := make([]string, len(currentAddrList))
-	copy(currentSorted, currentAddrList)
-	sort.Strings(currentSorted)
-
-	for i := range tfSorted {
-		if tfSorted[i] != currentSorted[i] {
-			return false
+			for i := range tfSorted {
+				if tfSorted[i] != currentSorted[i] {
+					return false
+				}
+			}
+			return true
 		}
 	}
-
-	return true
+	v1 := strings.Trim(strings.ReplaceAll(terraformValue, " ", ""), "\"")
+	v2 := strings.Trim(strings.ReplaceAll(currentValue, " ", ""), "\"")
+	return v1 == v2
 }
 
 func comparePlainValues(v1, v2 string) bool {
@@ -317,6 +318,19 @@ func comparePlainValues(v1, v2 string) bool {
 	v2 = strings.Trim(strings.ReplaceAll(v2, " ", ""), "\"")
 
 	return v1 == v2
+}
+
+func normalizeAddressValue(value string) string {
+	var data map[string][]string
+	if err := json.Unmarshal([]byte(value), &data); err == nil {
+		if addresses, ok := data["address"]; ok && len(addresses) == 1 {
+			return addresses[0]
+		}
+		normalized, _ := json.Marshal(data)
+		return string(normalized)
+	}
+
+	return value
 }
 
 func normalizeValue(value string) string {
