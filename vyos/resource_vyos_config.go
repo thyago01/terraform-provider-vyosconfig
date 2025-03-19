@@ -40,6 +40,18 @@ func extractConfigValue(v interface{}) string {
 
 	switch val := v.(type) {
 	case map[string]interface{}:
+		if addresses, ok := val["address"].([]interface{}); ok {
+			addressStrings := make([]string, len(addresses))
+			for i, addr := range addresses {
+				addressStrings[i] = fmt.Sprintf("%v", addr)
+			}
+			sort.Strings(addressStrings)
+
+			result := map[string][]string{"address": addressStrings}
+			bytes, _ := json.Marshal(result)
+			return string(bytes)
+		}
+
 		if len(val) == 1 {
 			for k, v := range val {
 				if nested, ok := v.(map[string]interface{}); ok && len(nested) == 0 {
@@ -47,14 +59,25 @@ func extractConfigValue(v interface{}) string {
 				}
 			}
 		}
+
 		bytes, _ := json.Marshal(val)
 		return string(bytes)
+
 	case []interface{}:
-		sort.Slice(val, func(i, j int) bool {
-			return fmt.Sprintf("%v", val[i]) < fmt.Sprintf("%v", val[j])
-		})
-		bytes, _ := json.Marshal(val)
+		strValues := make([]string, len(val))
+		for i, v := range val {
+			strValues[i] = fmt.Sprintf("%v", v)
+		}
+		sort.Strings(strValues)
+
+		sortedVal := make([]interface{}, len(strValues))
+		for i, s := range strValues {
+			sortedVal[i] = s
+		}
+
+		bytes, _ := json.Marshal(sortedVal)
 		return string(bytes)
+
 	default:
 		return fmt.Sprintf("%v", val)
 	}
@@ -224,10 +247,15 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 			currentValue, err := r.client.GetPathValue(pathParts)
 			if err == nil {
 				terraformValue := cmd.Value.ValueString()
-				normalizedTerraformValue := normalizeValue(terraformValue)
-				normalizedCurrentValue := normalizeValue(currentValue)
 
-				if normalizedCurrentValue != normalizedTerraformValue {
+				// Para casos específicos como endereços IP, precisamos fazer uma comparação mais inteligente
+				if len(pathParts) > 0 && pathParts[len(pathParts)-1] == "address" {
+					equal := compareAddressValues(terraformValue, currentValue)
+					if !equal {
+						state.Commands[i].Value = types.StringValue(currentValue)
+						updateRequired = true
+					}
+				} else if currentValue != terraformValue {
 					state.Commands[i].Value = types.StringValue(currentValue)
 					updateRequired = true
 				}
@@ -239,6 +267,56 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 		state.ID = types.StringValue(generateConfigID(state.Commands))
 		resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 	}
+}
+
+func compareAddressValues(terraformValue, currentValue string) bool {
+	if terraformValue == currentValue {
+		return true
+	}
+
+	var tfAddresses, currentAddresses map[string][]string
+
+	if err := json.Unmarshal([]byte(terraformValue), &tfAddresses); err != nil {
+		return comparePlainValues(terraformValue, currentValue)
+	}
+
+	if err := json.Unmarshal([]byte(currentValue), &currentAddresses); err != nil {
+		return comparePlainValues(terraformValue, currentValue)
+	}
+
+	tfAddrList, tfOk := tfAddresses["address"]
+	currentAddrList, currentOk := currentAddresses["address"]
+
+	if !tfOk || !currentOk {
+		return comparePlainValues(terraformValue, currentValue)
+	}
+
+	if len(tfAddrList) != len(currentAddrList) {
+		return false
+	}
+
+	tfSorted := make([]string, len(tfAddrList))
+	copy(tfSorted, tfAddrList)
+	sort.Strings(tfSorted)
+
+	currentSorted := make([]string, len(currentAddrList))
+	copy(currentSorted, currentAddrList)
+	sort.Strings(currentSorted)
+
+	for i := range tfSorted {
+		if tfSorted[i] != currentSorted[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func comparePlainValues(v1, v2 string) bool {
+	v1 = strings.Trim(strings.ReplaceAll(v1, " ", ""), "\"")
+	v2 = strings.Trim(strings.ReplaceAll(v2, " ", ""), "\"")
+
+	return v1 == v2
 }
 
 func normalizeValue(value string) string {

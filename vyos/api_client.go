@@ -247,11 +247,14 @@ func (c *APIClient) GetPathValue(path []string) (string, error) {
 
 	if len(path) > 0 && path[len(path)-1] == "address" {
 		if addresses, ok := config["address"].([]interface{}); ok {
-			sort.Slice(addresses, func(i, j int) bool {
-				return fmt.Sprintf("%v", addresses[i]) < fmt.Sprintf("%v", addresses[j])
-			})
-			valueMap := map[string]interface{}{"address": addresses}
-			bytes, _ := json.Marshal(valueMap)
+			addressStrings := make([]string, len(addresses))
+			for i, addr := range addresses {
+				addressStrings[i] = fmt.Sprintf("%v", addr)
+			}
+			sort.Strings(addressStrings)
+
+			result := map[string][]string{"address": addressStrings}
+			bytes, _ := json.Marshal(result)
 			return string(bytes), nil
 		}
 	}
