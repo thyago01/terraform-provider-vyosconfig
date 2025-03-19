@@ -96,7 +96,7 @@ func NewVyosConfigResource() resource.Resource {
 }
 
 func (r *vyosConfigResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "vyos_config"
+	resp.TypeName = "vyosconfig_command"
 }
 
 func (r *vyosConfigResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
