@@ -244,19 +244,15 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 				}
 			}
 
+			if len(pathParts) > 0 && pathParts[len(pathParts)-1] == "address" {
+				continue
+			}
+
 			currentValue, err := r.client.GetPathValue(pathParts)
 			if err == nil {
 				terraformValue := cmd.Value.ValueString()
 
-				if len(pathParts) > 0 && pathParts[len(pathParts)-1] == "address" {
-					normalizedCurrent := normalizeAddressValue(currentValue)
-					normalizedTF := normalizeAddressValue(terraformValue)
-
-					if normalizedCurrent != normalizedTF {
-						state.Commands[i].Value = types.StringValue(currentValue)
-						updateRequired = true
-					}
-				} else if currentValue != terraformValue {
+				if currentValue != terraformValue {
 					state.Commands[i].Value = types.StringValue(currentValue)
 					updateRequired = true
 				}
@@ -268,84 +264,6 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 		state.ID = types.StringValue(generateConfigID(state.Commands))
 		resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 	}
-}
-
-func compareAddressValues(terraformValue, currentValue string) bool {
-	normTF := normalizeAddressValue(terraformValue)
-	normCurrent := normalizeAddressValue(currentValue)
-
-	if normTF == normCurrent {
-		return true
-	}
-
-	var tfAddresses, currentAddresses map[string][]string
-
-	tfErr := json.Unmarshal([]byte(terraformValue), &tfAddresses)
-	currentErr := json.Unmarshal([]byte(currentValue), &currentAddresses)
-
-	if tfErr == nil && currentErr == nil {
-		tfAddrList, tfOk := tfAddresses["address"]
-		currentAddrList, currentOk := currentAddresses["address"]
-
-		if tfOk && currentOk {
-			if len(tfAddrList) != len(currentAddrList) {
-				return false
-			}
-
-			tfSorted := make([]string, len(tfAddrList))
-			copy(tfSorted, tfAddrList)
-			sort.Strings(tfSorted)
-
-			currentSorted := make([]string, len(currentAddrList))
-			copy(currentSorted, currentAddrList)
-			sort.Strings(currentSorted)
-
-			for i := range tfSorted {
-				if tfSorted[i] != currentSorted[i] {
-					return false
-				}
-			}
-			return true
-		}
-	}
-	v1 := strings.Trim(strings.ReplaceAll(terraformValue, " ", ""), "\"")
-	v2 := strings.Trim(strings.ReplaceAll(currentValue, " ", ""), "\"")
-	return v1 == v2
-}
-
-func comparePlainValues(v1, v2 string) bool {
-	v1 = strings.Trim(strings.ReplaceAll(v1, " ", ""), "\"")
-	v2 = strings.Trim(strings.ReplaceAll(v2, " ", ""), "\"")
-
-	return v1 == v2
-}
-
-func normalizeAddressValue(value string) string {
-	var data map[string][]string
-	if err := json.Unmarshal([]byte(value), &data); err == nil {
-		if addresses, ok := data["address"]; ok && len(addresses) == 1 {
-			return addresses[0]
-		}
-		normalized, _ := json.Marshal(data)
-		return string(normalized)
-	}
-
-	return value
-}
-
-func normalizeValue(value string) string {
-	var jsonVal interface{}
-	if err := json.Unmarshal([]byte(value), &jsonVal); err == nil {
-		if arr, ok := jsonVal.([]interface{}); ok {
-			sort.Slice(arr, func(i, j int) bool {
-				return fmt.Sprintf("%v", arr[i]) < fmt.Sprintf("%v", arr[j])
-			})
-			jsonVal = arr
-		}
-		bytes, _ := json.Marshal(jsonVal)
-		return string(bytes)
-	}
-	return value
 }
 
 func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
