@@ -70,22 +70,22 @@ jobs:
         if: env.IS_TAG == 'true'
         shell: bash
         run: |
-          mkdir -p terraform-registry.io/thyago01/vyosconfig/$VERSION/${{ matrix.os_arch }}
-          cp terraform-provider-vyosconfig${{ matrix.ext }} terraform-registry.io/thyago01/vyosconfig/$VERSION/${{ matrix.os_arch }}/terraform-provider-vyosconfig_v$VERSION${{ matrix.ext }}
+          RELEASE_FILENAME="terraform-provider-vyosconfig_${VERSION}_${{ matrix.os_arch }}.zip"
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            7z a -tzip terraform-provider-vyosconfig_${VERSION}_${{ matrix.os_arch }}.zip terraform-registry.io/
+            7z a -tzip "$RELEASE_FILENAME" "terraform-provider-vyosconfig${{ matrix.ext }}"
           else
-            zip -r terraform-provider-vyosconfig_${VERSION}_${{ matrix.os_arch }}.zip terraform-registry.io/
+            zip "$RELEASE_FILENAME" "terraform-provider-vyosconfig${{ matrix.ext }}"
           fi
 
       - name: Create Development Build
         if: env.IS_TAG == 'false'
         shell: bash
         run: |
+          DEV_FILENAME="terraform-provider-vyosconfig_dev_${{ matrix.os_arch }}.zip"
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            7z a -tzip terraform-provider-vyosconfig_dev_${{ matrix.os_arch }}.zip terraform-provider-vyosconfig${{ matrix.ext }}
+            7z a -tzip "$DEV_FILENAME" "terraform-provider-vyosconfig${{ matrix.ext }}"
           else
-            zip terraform-provider-vyosconfig_dev_${{ matrix.os_arch }}.zip terraform-provider-vyosconfig${{ matrix.ext }}
+            zip "$DEV_FILENAME" "terraform-provider-vyosconfig${{ matrix.ext }}"
           fi
 
       - name: Upload Release Files
@@ -116,8 +116,6 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" # Apenas para debug
-
 
       - name: Create Manifest
         run: |
@@ -133,7 +131,7 @@ jobs:
       - name: Setup GPG
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }} 
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --passphrase "$GPG_PASSPHRASE" --import
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
@@ -141,7 +139,7 @@ jobs:
 
       - name: Generate SHA256SUMS
         env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }} 
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           sha256sum terraform-provider-vyosconfig_${VERSION}_*.zip terraform-provider-vyosconfig_${VERSION}_manifest.json > terraform-provider-vyosconfig_${VERSION}_SHA256SUMS
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback --detach-sign terraform-provider-vyosconfig_${VERSION}_SHA256SUMS
