@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"sort"
 )
 
 type APIClient struct {
@@ -243,6 +244,18 @@ func (c *APIClient) GetPathValue(path []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	if len(path) > 0 && path[len(path)-1] == "address" {
+		if addresses, ok := config["address"].([]interface{}); ok {
+			sort.Slice(addresses, func(i, j int) bool {
+				return fmt.Sprintf("%v", addresses[i]) < fmt.Sprintf("%v", addresses[j])
+			})
+			valueMap := map[string]interface{}{"address": addresses}
+			bytes, _ := json.Marshal(valueMap)
+			return string(bytes), nil
+		}
+	}
+
 	return extractConfigValue(config), nil
 }
 func (c *APIClient) GetNextHops(routePath []string) ([]string, error) {

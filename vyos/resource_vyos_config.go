@@ -50,6 +50,9 @@ func extractConfigValue(v interface{}) string {
 		bytes, _ := json.Marshal(val)
 		return string(bytes)
 	case []interface{}:
+		sort.Slice(val, func(i, j int) bool {
+			return fmt.Sprintf("%v", val[i]) < fmt.Sprintf("%v", val[j])
+		})
 		bytes, _ := json.Marshal(val)
 		return string(bytes)
 	default:
@@ -220,7 +223,11 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 
 			currentValue, err := r.client.GetPathValue(pathParts)
 			if err == nil {
-				if currentValue != cmd.Value.ValueString() {
+				terraformValue := cmd.Value.ValueString()
+				normalizedTerraformValue := normalizeValue(terraformValue)
+				normalizedCurrentValue := normalizeValue(currentValue)
+
+				if normalizedCurrentValue != normalizedTerraformValue {
 					state.Commands[i].Value = types.StringValue(currentValue)
 					updateRequired = true
 				}
@@ -232,6 +239,21 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 		state.ID = types.StringValue(generateConfigID(state.Commands))
 		resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 	}
+}
+
+func normalizeValue(value string) string {
+	var jsonVal interface{}
+	if err := json.Unmarshal([]byte(value), &jsonVal); err == nil {
+		if arr, ok := jsonVal.([]interface{}); ok {
+			sort.Slice(arr, func(i, j int) bool {
+				return fmt.Sprintf("%v", arr[i]) < fmt.Sprintf("%v", arr[j])
+			})
+			jsonVal = arr
+		}
+		bytes, _ := json.Marshal(jsonVal)
+		return string(bytes)
+	}
+	return value
 }
 
 func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
