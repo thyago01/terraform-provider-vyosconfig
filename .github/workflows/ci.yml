@@ -51,12 +51,12 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          if ($Env:RUNNER_OS -eq "Windows") {
-            $env:CGO_ENABLED = "0"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export CGO_ENABLED=0
             go build -o terraform-provider-vyosconfig${{ matrix.ext }} .
-          } else {
+          else
             CGO_ENABLED=0 go build -o terraform-provider-vyosconfig${{ matrix.ext }} .
-          }
+          fi
         shell: bash
 
       - name: Set Version
