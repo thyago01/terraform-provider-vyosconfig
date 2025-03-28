@@ -50,7 +50,14 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: CGO_ENABLED=0 go build -o terraform-provider-vyosconfig${{ matrix.ext }} .
+        run: |
+          if ($Env:RUNNER_OS -eq "Windows") {
+            $env:CGO_ENABLED = "0"
+            go build -o terraform-provider-vyosconfig${{ matrix.ext }} .
+          } else {
+            CGO_ENABLED=0 go build -o terraform-provider-vyosconfig${{ matrix.ext }} .
+          }
+        shell: bash
 
       - name: Set Version
         id: set_version
