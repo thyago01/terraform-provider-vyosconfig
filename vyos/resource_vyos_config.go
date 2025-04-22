@@ -46,16 +46,22 @@ func extractConfigValue(v interface{}) string {
 				addressStrings[i] = fmt.Sprintf("%v", addr)
 			}
 			sort.Strings(addressStrings)
-
 			result := map[string][]string{"address": addressStrings}
 			bytes, _ := json.Marshal(result)
 			return string(bytes)
 		}
 
 		if len(val) == 1 {
-			for k, v := range val {
-				if nested, ok := v.(map[string]interface{}); ok && len(nested) == 0 {
-					return k
+			for _, inner := range val {
+				switch nested := inner.(type) {
+				case map[string]interface{}:
+					if len(nested) == 0 {
+						for k := range val {
+							return k
+						}
+					}
+				default:
+					return fmt.Sprintf("%v", nested)
 				}
 			}
 		}
@@ -69,12 +75,10 @@ func extractConfigValue(v interface{}) string {
 			strValues[i] = fmt.Sprintf("%v", v)
 		}
 		sort.Strings(strValues)
-
 		sortedVal := make([]interface{}, len(strValues))
 		for i, s := range strValues {
 			sortedVal[i] = s
 		}
-
 		bytes, _ := json.Marshal(sortedVal)
 		return string(bytes)
 
@@ -98,7 +102,6 @@ func getRouteBasePath(path []string) []string {
 			break
 		}
 	}
-
 	if routeEndIdx != -1 {
 		return path[:routeEndIdx]
 	}
@@ -110,7 +113,6 @@ func (r *vyosConfigResource) hasMultipleNextHops(routePath []string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-
 	if nextHops, ok := config["next-hop"].(map[string]interface{}); ok {
 		return len(nextHops) > 1, nil
 	}
@@ -165,15 +167,14 @@ func (r *vyosConfigResource) Configure(ctx context.Context, req resource.Configu
 
 func (r *vyosConfigResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan vyosConfigModel
-	diags := req.Plan.Get(ctx, &plan)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	commands := processCommandsForAPI(plan.Commands)
 	if err := r.client.ApplyCommands(commands); err != nil {
-		resp.Diagnostics.AddError("Failed", err.Error())
+		resp.Diagnostics.AddError("Failed to apply configuration", err.Error())
 		return
 	}
 
@@ -181,7 +182,6 @@ func (r *vyosConfigResource) Create(ctx context.Context, req resource.CreateRequ
 		Commands: plan.Commands,
 		ID:       types.StringValue(generateConfigID(plan.Commands)),
 	}
-
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
