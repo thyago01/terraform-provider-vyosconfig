@@ -23,16 +23,7 @@ func generateConfigID(commands []vyosCommandModel) string {
 	for _, cmd := range commands {
 		op := cmd.Op.ValueString()
 		path := strings.Join(toStringSlice(cmd.Path), "::")
-		value := ""
-
-		if op == "set" {
-			value = cmd.Value.ValueString()
-			if isRoutePath(toStringSlice(cmd.Path)) && strings.Contains(path, "next-hop") {
-				value = ""
-			}
-		}
-
-		hasher.Write([]byte(fmt.Sprintf("%s:%s:%s", op, path, value)))
+		hasher.Write([]byte(fmt.Sprintf("%s:%s", op, path)))
 	}
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
@@ -150,10 +141,6 @@ func (r *vyosConfigResource) Schema(ctx context.Context, req resource.SchemaRequ
 							Required:    true,
 							Description: "Configuration path",
 						},
-						"value": schema.StringAttribute{
-							Optional:    true,
-							Description: "Configuration value (used only for 'set' operations)",
-						},
 					},
 				},
 			},
@@ -182,67 +169,18 @@ func (r *vyosConfigResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	newState := vyosConfigModel{
-		Commands: make([]vyosCommandModel, len(plan.Commands)),
+		Commands: plan.Commands,
 		ID:       types.StringValue(generateConfigID(plan.Commands)),
 	}
-
-	for i, cmd := range plan.Commands {
-		pathParts := toStringSlice(cmd.Path)
-		pathList, _ := types.ListValueFrom(ctx, types.StringType, pathParts)
-
-		newCmd := vyosCommandModel{
-			Op:   cmd.Op,
-			Path: pathList,
-		}
-
-		if cmd.Op.ValueString() == "set" {
-			currentValue := cmd.Value.ValueString()
-
-			if !(isRoutePath(pathParts) && len(pathParts) == 4 && pathParts[3] == "next-hop") {
-				val, err := r.client.GetPathValue(pathParts)
-				if err == nil && val != "" {
-					currentValue = val
-				}
-			}
-
-			newCmd.Value = types.StringValue(currentValue)
-		} else {
-			newCmd.Value = types.StringNull()
-		}
-
-		newState.Commands[i] = newCmd
-	}
-
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
 func processCommandsForAPI(commands []vyosCommandModel) []Command {
 	apiCommands := make([]Command, len(commands))
 	for i, cmd := range commands {
-		pathParts := toStringSlice(cmd.Path)
-
-		if cmd.Op.ValueString() == "set" && !cmd.Value.IsNull() {
-			value := cmd.Value.ValueString()
-
-			if isRoutePath(pathParts) && len(pathParts) >= 1 && pathParts[len(pathParts)-1] == "next-hop" {
-				apiCommands[i] = Command{
-					Op:    "set",
-					Path:  append(pathParts, value),
-					Value: "",
-				}
-			} else {
-				apiCommands[i] = Command{
-					Op:    "set",
-					Path:  pathParts,
-					Value: value,
-				}
-			}
-		} else {
-			apiCommands[i] = Command{
-				Op:    cmd.Op.ValueString(),
-				Path:  pathParts,
-				Value: "",
-			}
+		apiCommands[i] = Command{
+			Op:   cmd.Op.ValueString(),
+			Path: toStringSlice(cmd.Path),
 		}
 	}
 	return apiCommands
@@ -256,8 +194,7 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	updateRequired := false
-	for i, cmd := range state.Commands {
+	for _, cmd := range state.Commands {
 		if cmd.Op.ValueString() == "set" {
 			pathParts := toStringSlice(cmd.Path)
 			exists, err := r.client.PathExists(pathParts)
@@ -275,34 +212,13 @@ func (r *vyosConfigResource) Read(ctx context.Context, req resource.ReadRequest,
 					} else if !routeExists {
 						resp.State.RemoveResource(ctx)
 						return
-					} else {
-						updateRequired = true
 					}
 				} else {
 					resp.State.RemoveResource(ctx)
 					return
 				}
 			}
-
-			if len(pathParts) > 0 && pathParts[len(pathParts)-1] == "address" {
-				continue
-			}
-
-			currentValue, err := r.client.GetPathValue(pathParts)
-			if err == nil {
-				terraformValue := cmd.Value.ValueString()
-
-				if currentValue != terraformValue {
-					state.Commands[i].Value = types.StringValue(currentValue)
-					updateRequired = true
-				}
-			}
 		}
-	}
-
-	if updateRequired {
-		state.ID = types.StringValue(generateConfigID(state.Commands))
-		resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 	}
 }
 
@@ -329,17 +245,10 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 			pathKey := makePathKey(pathParts)
 
 			if !keepPaths[pathKey] {
-				if IsRoutePath(pathParts) && len(pathParts) >= 5 && pathParts[3] == "next-hop" {
-					deleteCommands = append(deleteCommands, Command{
-						Op:   "delete",
-						Path: pathParts,
-					})
-				} else {
-					deleteCommands = append(deleteCommands, Command{
-						Op:   "delete",
-						Path: pathParts,
-					})
-				}
+				deleteCommands = append(deleteCommands, Command{
+					Op:   "delete",
+					Path: pathParts,
+				})
 			}
 		}
 	}
@@ -351,35 +260,7 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 		}
 	}
 
-	newCommands := make([]Command, 0)
-	for _, cmd := range plan.Commands {
-		if cmd.Op.ValueString() == "set" && !cmd.Value.IsNull() {
-			pathParts := toStringSlice(cmd.Path)
-			value := cmd.Value.ValueString()
-
-			if IsRoutePath(pathParts) && len(pathParts) == 4 && pathParts[3] == "next-hop" {
-				newCommands = append(newCommands, Command{
-					Op:    "set",
-					Path:  append(pathParts, value),
-					Value: "",
-				})
-			} else {
-				newCommands = append(newCommands, Command{
-					Op:    cmd.Op.ValueString(),
-					Path:  pathParts,
-					Value: value,
-				})
-			}
-		} else if cmd.Op.ValueString() == "delete" {
-			pathParts := toStringSlice(cmd.Path)
-			newCommands = append(newCommands, Command{
-				Op:    "delete",
-				Path:  pathParts,
-				Value: "",
-			})
-		}
-	}
-
+	newCommands := processCommandsForAPI(plan.Commands)
 	if len(newCommands) > 0 {
 		if err := r.client.ApplyCommands(newCommands); err != nil {
 			resp.Diagnostics.AddError("Failed to apply new configuration", err.Error())
@@ -388,41 +269,9 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 
 	newState := vyosConfigModel{
-		Commands: make([]vyosCommandModel, len(plan.Commands)),
+		Commands: plan.Commands,
+		ID:       types.StringValue(generateConfigID(plan.Commands)),
 	}
-
-	for i, cmd := range plan.Commands {
-		pathParts := toStringSlice(cmd.Path)
-		pathList, _ := types.ListValueFrom(ctx, types.StringType, pathParts)
-
-		newCmd := vyosCommandModel{
-			Op:   cmd.Op,
-			Path: pathList,
-		}
-
-		if cmd.Op.ValueString() == "set" {
-			currentValue := ""
-
-			if IsRoutePath(pathParts) && len(pathParts) == 4 && pathParts[3] == "next-hop" {
-				currentValue = cmd.Value.ValueString()
-			} else {
-				var err error
-				currentValue, err = r.client.GetPathValue(pathParts)
-				if err != nil {
-					resp.Diagnostics.AddWarning("Error getting current value", err.Error())
-					currentValue = cmd.Value.ValueString()
-				}
-			}
-
-			newCmd.Value = types.StringValue(currentValue)
-		} else {
-			newCmd.Value = types.StringNull()
-		}
-
-		newState.Commands[i] = newCmd
-	}
-
-	newState.ID = types.StringValue(generateConfigID(newState.Commands))
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
@@ -444,26 +293,15 @@ func (r *vyosConfigResource) Delete(ctx context.Context, req resource.DeleteRequ
 		if cmd.Op.ValueString() == "set" {
 			pathParts := toStringSlice(cmd.Path)
 
-			if isRoutePath(pathParts) && len(pathParts) >= 5 && pathParts[3] == "next-hop" {
-				routeBasePath := pathParts[:4]
-				targetNextHop := pathParts[4]
-
-				deleteCommands = append(deleteCommands, Command{
-					Op:   "delete",
-					Path: append(routeBasePath, "next-hop", targetNextHop),
-				})
-			}
-		}
-	}
-
-	for _, cmd := range state.Commands {
-		if cmd.Op.ValueString() == "set" {
-			pathParts := toStringSlice(cmd.Path)
-
 			if isRoutePath(pathParts) && len(pathParts) >= 4 && pathParts[2] == "route" {
 				deleteCommands = append(deleteCommands, Command{
 					Op:   "delete",
 					Path: pathParts[:4],
+				})
+			} else {
+				deleteCommands = append(deleteCommands, Command{
+					Op:   "delete",
+					Path: pathParts,
 				})
 			}
 		}
@@ -524,7 +362,6 @@ type vyosConfigModel struct {
 }
 
 type vyosCommandModel struct {
-	Op    types.String `tfsdk:"op"`
-	Path  types.List   `tfsdk:"path"`
-	Value types.String `tfsdk:"value"`
+	Op   types.String `tfsdk:"op"`
+	Path types.List   `tfsdk:"path"`
 }

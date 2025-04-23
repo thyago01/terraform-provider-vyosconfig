@@ -67,9 +67,6 @@ func (c *APIClient) ApplyCommands(commands []Command) error {
 			"op":   cmd.Op,
 			"path": cmd.Path,
 		}
-		if cmd.Op == "set" && cmd.Value != "" {
-			command["value"] = cmd.Value
-		}
 		payload["commands"] = append(payload["commands"].([]map[string]interface{}), command)
 	}
 

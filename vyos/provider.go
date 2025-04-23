@@ -17,7 +17,7 @@ func New() provider.Provider {
 
 func (p *VyosProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "vyosconfig"
-	resp.Version = "1.0.12"
+	resp.Version = "1.0.13"
 }
 
 func (p *VyosProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
