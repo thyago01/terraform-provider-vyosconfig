@@ -23,11 +23,15 @@ func generateConfigID(commands []vyosCommandModel) string {
 	for _, cmd := range commands {
 		op := cmd.Op.ValueString()
 		path := strings.Join(toStringSlice(cmd.Path), "::")
-		value := cmd.Value.ValueString()
+		value := ""
 
-		if isRoutePath(toStringSlice(cmd.Path)) && strings.Contains(path, "next-hop") {
-			value = ""
+		if op == "set" {
+			value = cmd.Value.ValueString()
+			if isRoutePath(toStringSlice(cmd.Path)) && strings.Contains(path, "next-hop") {
+				value = ""
+			}
 		}
+
 		hasher.Write([]byte(fmt.Sprintf("%s:%s:%s", op, path, value)))
 	}
 	return fmt.Sprintf("%x", hasher.Sum(nil))
@@ -148,8 +152,7 @@ func (r *vyosConfigResource) Schema(ctx context.Context, req resource.SchemaRequ
 						},
 						"value": schema.StringAttribute{
 							Optional:    true,
-							Computed:    true,
-							Description: "Configuration value",
+							Description: "Configuration value (used only for 'set' operations)",
 						},
 					},
 				},
@@ -179,9 +182,37 @@ func (r *vyosConfigResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	newState := vyosConfigModel{
-		Commands: plan.Commands,
+		Commands: make([]vyosCommandModel, len(plan.Commands)),
 		ID:       types.StringValue(generateConfigID(plan.Commands)),
 	}
+
+	for i, cmd := range plan.Commands {
+		pathParts := toStringSlice(cmd.Path)
+		pathList, _ := types.ListValueFrom(ctx, types.StringType, pathParts)
+
+		newCmd := vyosCommandModel{
+			Op:   cmd.Op,
+			Path: pathList,
+		}
+
+		if cmd.Op.ValueString() == "set" {
+			currentValue := cmd.Value.ValueString()
+
+			if !(isRoutePath(pathParts) && len(pathParts) == 4 && pathParts[3] == "next-hop") {
+				val, err := r.client.GetPathValue(pathParts)
+				if err == nil && val != "" {
+					currentValue = val
+				}
+			}
+
+			newCmd.Value = types.StringValue(currentValue)
+		} else {
+			newCmd.Value = types.StringNull()
+		}
+
+		newState.Commands[i] = newCmd
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
@@ -189,19 +220,28 @@ func processCommandsForAPI(commands []vyosCommandModel) []Command {
 	apiCommands := make([]Command, len(commands))
 	for i, cmd := range commands {
 		pathParts := toStringSlice(cmd.Path)
-		value := cmd.Value.ValueString()
 
-		if isRoutePath(pathParts) && cmd.Op.ValueString() == "set" && len(pathParts) >= 1 && pathParts[len(pathParts)-1] == "next-hop" {
-			apiCommands[i] = Command{
-				Op:    "set",
-				Path:  append(pathParts, value),
-				Value: "",
+		if cmd.Op.ValueString() == "set" && !cmd.Value.IsNull() {
+			value := cmd.Value.ValueString()
+
+			if isRoutePath(pathParts) && len(pathParts) >= 1 && pathParts[len(pathParts)-1] == "next-hop" {
+				apiCommands[i] = Command{
+					Op:    "set",
+					Path:  append(pathParts, value),
+					Value: "",
+				}
+			} else {
+				apiCommands[i] = Command{
+					Op:    "set",
+					Path:  pathParts,
+					Value: value,
+				}
 			}
 		} else {
 			apiCommands[i] = Command{
 				Op:    cmd.Op.ValueString(),
 				Path:  pathParts,
-				Value: value,
+				Value: "",
 			}
 		}
 	}
@@ -313,7 +353,7 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	newCommands := make([]Command, 0)
 	for _, cmd := range plan.Commands {
-		if cmd.Op.ValueString() == "set" {
+		if cmd.Op.ValueString() == "set" && !cmd.Value.IsNull() {
 			pathParts := toStringSlice(cmd.Path)
 			value := cmd.Value.ValueString()
 
@@ -330,6 +370,13 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 					Value: value,
 				})
 			}
+		} else if cmd.Op.ValueString() == "delete" {
+			pathParts := toStringSlice(cmd.Path)
+			newCommands = append(newCommands, Command{
+				Op:    "delete",
+				Path:  pathParts,
+				Value: "",
+			})
 		}
 	}
 
@@ -346,9 +393,16 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	for i, cmd := range plan.Commands {
 		pathParts := toStringSlice(cmd.Path)
-		currentValue := ""
+		pathList, _ := types.ListValueFrom(ctx, types.StringType, pathParts)
+
+		newCmd := vyosCommandModel{
+			Op:   cmd.Op,
+			Path: pathList,
+		}
 
 		if cmd.Op.ValueString() == "set" {
+			currentValue := ""
+
 			if IsRoutePath(pathParts) && len(pathParts) == 4 && pathParts[3] == "next-hop" {
 				currentValue = cmd.Value.ValueString()
 			} else {
@@ -356,16 +410,16 @@ func (r *vyosConfigResource) Update(ctx context.Context, req resource.UpdateRequ
 				currentValue, err = r.client.GetPathValue(pathParts)
 				if err != nil {
 					resp.Diagnostics.AddWarning("Error getting current value", err.Error())
+					currentValue = cmd.Value.ValueString()
 				}
 			}
+
+			newCmd.Value = types.StringValue(currentValue)
+		} else {
+			newCmd.Value = types.StringNull()
 		}
 
-		pathList, _ := types.ListValueFrom(ctx, types.StringType, pathParts)
-		newState.Commands[i] = vyosCommandModel{
-			Op:    cmd.Op,
-			Path:  pathList,
-			Value: types.StringValue(currentValue),
-		}
+		newState.Commands[i] = newCmd
 	}
 
 	newState.ID = types.StringValue(generateConfigID(newState.Commands))
@@ -421,6 +475,7 @@ func (r *vyosConfigResource) Delete(ctx context.Context, req resource.DeleteRequ
 		resp.Diagnostics.AddError("Falha ao excluir configuração", err.Error())
 	}
 }
+
 func sortCommandsByPathDepth(commands []Command) []Command {
 	sort.SliceStable(commands, func(i, j int) bool {
 		return len(commands[i].Path) > len(commands[j].Path)

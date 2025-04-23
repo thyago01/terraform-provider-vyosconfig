@@ -53,6 +53,7 @@ func GetRoutePrefix(path []string) string {
 	}
 	return ""
 }
+
 func (c *APIClient) ApplyCommands(commands []Command) error {
 	endpoint := fmt.Sprintf("%s/configure", c.Host)
 
@@ -66,7 +67,7 @@ func (c *APIClient) ApplyCommands(commands []Command) error {
 			"op":   cmd.Op,
 			"path": cmd.Path,
 		}
-		if cmd.Value != "" {
+		if cmd.Op == "set" && cmd.Value != "" {
 			command["value"] = cmd.Value
 		}
 		payload["commands"] = append(payload["commands"].([]map[string]interface{}), command)
@@ -261,6 +262,7 @@ func (c *APIClient) GetPathValue(path []string) (string, error) {
 
 	return extractConfigValue(config), nil
 }
+
 func (c *APIClient) GetNextHops(routePath []string) ([]string, error) {
 	if len(routePath) != 4 || routePath[0] != "protocols" || routePath[1] != "static" || routePath[2] != "route" {
 		return nil, fmt.Errorf("invalid path: %v", routePath)
